@@ -1,0 +1,37 @@
+name: tracker
+description: 个人追剧观影记录 App —— 自建条目、逐集记录、坚果云 WebDAV 同步
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  # drift_flutter 0.3 要求 Dart >= 3.10；build_runner 2.16 要求 >= 3.11。
+  # 放宽下限，让 pub 按本机实际 Dart 解析版本，避免装了别的 Flutter 版本就 pub get 失败。
+  sdk: '>=3.11.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 本地 SQLite 主存
+  drift: ^2.35.0
+  drift_flutter: ^0.3.1
+
+  # 路径处理（封面缓存目录）
+  path: ^1.9.1
+  path_provider: ^2.1.6
+
+  # 轻量本地偏好（封面墙列数、视图模式等）
+  shared_preferences: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # drift 代码生成
+  drift_dev: ^2.35.0
+  build_runner: ^2.16.1
+
+flutter:
+  uses-material-design: true

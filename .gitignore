@@ -1,0 +1,15 @@
+# 工作区自有产物
+.workbuddy/
+*.log
+s_*.png
+*.apk
+
+# Flutter 工程构建产物（tracker/ 下的 .gitignore 只覆盖自身目录）
+tracker/build/
+tracker/.dart_tool/
+tracker/android/local.properties
+tracker/android/.gradle/
+tracker/android/tracker_android.iml
+tracker/windows/flutter/ephemeral/
+tracker/linux/flutter/ephemeral/
+tracker/macos/Flutter/ephemeral/
