@@ -24,6 +24,8 @@ class TitleRepository {
   Future<Map<String, int>> watchedCounts() => _db.watchWatchedCounts().first;
 
   Future<String> create({
+    /// 外部指定的 id。元数据导入时先生成 id 下载封面，再用同一个 id 建记录。
+    String? id,
     required String name,
     required String type,
     String? platform,
@@ -32,19 +34,24 @@ class TitleRepository {
     String? coverUrl,
     String? externalId,
     String source = Sources.manual,
+    String? releaseDate,
+
+    /// 已下载好的本地封面（元数据导入时用）。给了就不再重新生成占位图。
+    String? coverPath,
   }) async {
-    final id = generateId();
+    final newId = id ?? generateId();
     final ts = _db.nextTimestamp();
 
     await _db.insertTitle(
       TitlesCompanion(
-        id: Value(id),
+        id: Value(newId),
         name: Value(name),
         type: Value(type),
         platform: Value(platform),
         status: Value(status),
         totalEpisodes: Value(totalEpisodes),
         coverUrl: Value(coverUrl),
+        releaseDate: Value(releaseDate),
         createdAt: Value(ts),
         updatedAt: Value(ts),
         source: Value(source),
@@ -53,18 +60,30 @@ class TitleRepository {
     );
 
     if (totalEpisodes != null && totalEpisodes > 0) {
-      await _db.ensureEpisodes(id, totalEpisodes);
+      await _db.ensureEpisodes(newId, totalEpisodes);
     }
 
-    // 没有远程封面时，本地生成占位海报
-    if (coverUrl == null || coverUrl.isEmpty) {
-      final path = await CoverGenerator.generate(id: id, title: name);
+    // 封面优先级：已下载的本地图 > 远程封面（留给运行时加载）> 本地生成占位图
+    var path = coverPath;
+    if (path == null && (coverUrl == null || coverUrl.isEmpty)) {
+      path = await CoverGenerator.generate(id: newId, title: name);
+    }
+    if (path != null) {
       await _db.updateTitle(
-        TitlesCompanion(id: Value(id), coverPath: Value(path)),
+        TitlesCompanion(id: Value(newId), coverPath: Value(path)),
       );
     }
 
-    return id;
+    return newId;
+  }
+
+  /// 同名条目查询：元数据导入前用它去重，避免重复建同一季。
+  Future<TitleRow?> findByName(String name) async {
+    final all = await _db.getAllTitles();
+    for (final t in all) {
+      if (t.name == name) return t;
+    }
+    return null;
   }
 
   Future<void> update(TitlesCompanion row) => _db.updateTitle(row);

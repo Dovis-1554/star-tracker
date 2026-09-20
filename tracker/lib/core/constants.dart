@@ -99,16 +99,71 @@ abstract final class ItemStatus {
 /// 数据模型是「一季一条记录」（`X 第N季`），但很多地方只需要剧名本体——
 /// 封面文字、详情页标题、首页聚合都用它。放 core 层，UI 与封面生成都能直接引。
 abstract final class TitleNames {
-  static final RegExp seasonPattern = RegExp(r'^(.*?)\s*第(\d+)季$');
+  /// 季号的各种写法。豆瓣常用「第一季 / 年番2」，我们自己的记录写作「第N季」，
+  /// 聚合与季号识别必须同时认得这几种，否则同剧各季会散成多张卡。
+  ///
+  /// 注意：**只用于识别，不用于改写名字**——从元数据导入的条目保留来源原始标题。
+  static final List<RegExp> seasonPatterns = <RegExp>[
+    RegExp(r'第\s*(\d+)\s*季'),
+    RegExp(r'第\s*([一二三四五六七八九十]+)\s*季'),
+    RegExp(r'年番\s*(\d+)'),
+    RegExp(r'第\s*([一二三四五六七八九十]+)\s*部'),
+    RegExp(r'[Ss]eason\s*(\d+)'),
+    RegExp(r'\b[Ss](\d{1,2})\b'),
+  ];
 
-  /// 去季号后的基准名：「X 第2季」→「X」；无季号则原样返回。
-  static String baseNameOf(String name) =>
-      seasonPattern.firstMatch(name)?.group(1) ?? name;
+  static const _cnDigits = <String, int>{
+    '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+    '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+  };
 
-  /// 条目自身季号；无「第N季」后缀视为第 1 季。
+  /// 去季号后的基准名：「X 第2季」「X 年番2」→「X」；无季号则原样返回。
+  static String baseNameOf(String name) {
+    for (final re in seasonPatterns) {
+      final m = re.firstMatch(name);
+      if (m == null) continue;
+      return _trimSeparators(name.substring(0, m.start).trim());
+    }
+    return name.trim();
+  }
+
+  /// 条目自身季号；识别不出季号视为第 1 季。
   static int seasonNoOf(String name) {
-    final m = seasonPattern.firstMatch(name);
-    return m != null ? int.tryParse(m.group(2)!) ?? 1 : 1;
+    for (final re in seasonPatterns) {
+      final m = re.firstMatch(name);
+      if (m == null) continue;
+      final raw = m.group(1)!;
+      return int.tryParse(raw) ?? _parseCn(raw) ?? 1;
+    }
+    return 1;
+  }
+
+  static String _trimSeparators(String s) {
+    var out = s;
+    while (out.isNotEmpty && '·•-—_:： '.contains(out[out.length - 1])) {
+      out = out.substring(0, out.length - 1);
+    }
+    return out.trim();
+  }
+
+  /// 中文数字 → 阿拉伯数字，支持到九十九（季号够用）。
+  static int? _parseCn(String s) {
+    if (s.isEmpty) return null;
+    if (s.contains('十')) {
+      final parts = s.split('十');
+      final tens = parts[0].isEmpty ? 1 : (_cnDigits[parts[0]] ?? 0);
+      final ones = parts.length > 1 && parts[1].isNotEmpty
+          ? (_cnDigits[parts[1]] ?? 0)
+          : 0;
+      return tens * 10 + ones;
+    }
+    var value = 0;
+    for (final ch in s.split('')) {
+      final d = _cnDigits[ch];
+      if (d == null) return null;
+      value = value * 10 + d;
+    }
+    return value;
   }
 }
 

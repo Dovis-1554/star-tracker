@@ -6,19 +6,35 @@ import '../../data/db/database.dart';
 import '../../main.dart';
 import '../../ui/widgets/option_chips.dart';
 
-/// 新建页的预填内容（例如详情页「新增一季」跳转过来时使用）。
+/// 新建页的预填内容（详情页「新增一季」、元数据搜索选中后跳转过来时使用）。
 class TitlePrefill {
   const TitlePrefill({
+    this.id,
     this.name,
     this.type,
     this.platform,
     this.status,
+    this.totalEpisodes,
+    this.releaseDate,
+    this.externalId,
+    this.coverUrl,
+    this.coverPath,
+    this.source,
   });
+
+  /// 元数据导入时预先生成的 id：封面已在跳转前按这个 id 下载好。
+  final String? id;
 
   final String? name;
   final String? type;
   final String? platform;
   final String? status;
+  final int? totalEpisodes;
+  final String? releaseDate;
+  final String? externalId;
+  final String? coverUrl;
+  final String? coverPath;
+  final String? source;
 }
 
 /// 新建 / 编辑条目。M1 为纯手动录入；M2 会在这之前插入元数据搜索态。
@@ -55,7 +71,10 @@ class _EditTitlePageState extends State<EditTitlePage> {
       text: item?.name ?? prefill?.name ?? '',
     );
     _totalController = TextEditingController(
-      text: item?.totalEpisodes?.toString() ?? '',
+      text:
+          item?.totalEpisodes?.toString() ??
+          prefill?.totalEpisodes?.toString() ??
+          '',
     );
     // comic 与 manga 曾重复显示为「漫画」，旧数据统一归并为 manga。
     _type = item?.type ?? prefill?.type ?? ItemTypes.tv;
@@ -76,9 +95,9 @@ class _EditTitlePageState extends State<EditTitlePage> {
     if (_saving) return; // 连点保护
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('标题不能为空')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('标题不能为空')));
       return;
     }
     final total = int.tryParse(_totalController.text.trim());
@@ -101,12 +120,20 @@ class _EditTitlePageState extends State<EditTitlePage> {
           totalEpisodes: total,
         );
       } else {
+        final prefill = widget.prefill;
         await repository.create(
+          // 元数据导入时沿用预生成的 id（封面已按这个 id 落盘）
+          id: prefill?.id,
           name: name,
           type: _type,
           platform: _platform,
           status: _status,
           totalEpisodes: total,
+          releaseDate: prefill?.releaseDate,
+          externalId: prefill?.externalId,
+          coverUrl: prefill?.coverUrl,
+          coverPath: prefill?.coverPath,
+          source: prefill?.source ?? Sources.manual,
         );
       }
       if (!mounted) return;
@@ -114,9 +141,9 @@ class _EditTitlePageState extends State<EditTitlePage> {
     } catch (err) {
       // 保存失败必须可见：否则按钮只是悄悄恢复，看起来像点了没反应。
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保存失败：$err')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('保存失败：$err')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -143,8 +170,9 @@ class _EditTitlePageState extends State<EditTitlePage> {
           },
           onSelected: (t) {
             _nameController.text = t.name;
-            _nameController.selection =
-                TextSelection.collapsed(offset: t.name.length);
+            _nameController.selection = TextSelection.collapsed(
+              offset: t.name.length,
+            );
             _nameFocus.unfocus();
           },
           fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
@@ -219,67 +247,82 @@ class _EditTitlePageState extends State<EditTitlePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.isEdit ? '编辑条目' : '新建条目'),
-      ),
+      // 输入法弹出时把底部保存条顶上去，避免按钮被键盘盖住。
+      resizeToAvoidBottomInset: true,
+      appBar: AppBar(title: Text(widget.isEdit ? '编辑条目' : '新建条目')),
+      // 底栏必须放在 body 里：Scaffold 的 bottomNavigationBar 是按整屏高定位的，
+      // 键盘只压缩 body，不会把它顶起来（会被键盘盖住）。
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+        child: Column(
           children: [
-            _FieldLabel('标题'),
-            const SizedBox(height: 8),
-            _titleField(),
-            const SizedBox(height: 20),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _FieldLabel('标题'),
+                  const SizedBox(height: 8),
+                  _titleField(),
+                  const SizedBox(height: 20),
 
-            _FieldLabel('类型'),
-            const SizedBox(height: 8),
-            OptionChips<String>(
-              options: ItemTypes.all,
-              selected: _type,
-              labelOf: ItemTypes.label,
-              onChanged: (v) => setState(() => _type = v),
-            ),
-            const SizedBox(height: 20),
+                  _FieldLabel('类型'),
+                  const SizedBox(height: 8),
+                  OptionChips<String>(
+                    options: ItemTypes.all,
+                    selected: _type,
+                    labelOf: ItemTypes.label,
+                    onChanged: (v) => setState(() => _type = v),
+                  ),
+                  const SizedBox(height: 20),
 
-            _FieldLabel('平台'),
-            const SizedBox(height: 8),
-            OptionChips<String?>(
-              options: Platforms.all,
-              selected: _platform,
-              // 平台选填，selected 可能为 null；兜底成「其他」只影响标签显示。
-              labelOf: (v) => Platforms.label(v ?? Platforms.other),
-              onChanged: (v) => setState(() => _platform = v),
-            ),
-            const SizedBox(height: 20),
+                  _FieldLabel('平台'),
+                  const SizedBox(height: 8),
+                  OptionChips<String?>(
+                    options: Platforms.all,
+                    selected: _platform,
+                    // 平台选填，selected 可能为 null；兜底成「其他」只影响标签显示。
+                    labelOf: (v) => Platforms.label(v ?? Platforms.other),
+                    onChanged: (v) => setState(() => _platform = v),
+                  ),
+                  const SizedBox(height: 20),
 
-            _FieldLabel('总集数'),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _totalController,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(
-                fontSize: AppTheme.fontSizeNormal,
-                color: AppTheme.textPrimary,
+                  _FieldLabel('总集数'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _totalController,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(
+                      fontSize: AppTheme.fontSizeNormal,
+                      color: AppTheme.textPrimary,
+                    ),
+                    decoration: const InputDecoration(hintText: '留空表示未知'),
+                  ),
+                  const SizedBox(height: 20),
+
+                  _FieldLabel('状态'),
+                  const SizedBox(height: 8),
+                  OptionChips<String>(
+                    options: ItemStatus.all,
+                    selected: _status,
+                    labelOf: ItemStatus.label,
+                    onChanged: (v) => setState(() => _status = v),
+                  ),
+                  // 表单内容底部留白，保证最后一项不会被固定保存条压住。
+                  const SizedBox(height: 24),
+                ],
               ),
-              decoration: const InputDecoration(hintText: '留空表示未知'),
             ),
-            const SizedBox(height: 20),
-
-            _FieldLabel('状态'),
-            const SizedBox(height: 8),
-            OptionChips<String>(
-              options: ItemStatus.all,
-              selected: _status,
-              labelOf: ItemStatus.label,
-              onChanged: (v) => setState(() => _status = v),
-            ),
-            const SizedBox(height: 32),
-
-            FilledButton(
-              onPressed: _saving ? null : _save,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(_saving ? '保存中…' : '保存'),
+            // 保存常驻底部：body 高度随键盘收缩，所以它会跟着输入法一起抬高。
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _saving ? null : _save,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(_saving ? '保存中…' : '保存'),
+                  ),
+                ),
               ),
             ),
           ],

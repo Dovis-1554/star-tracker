@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- M2 起需要联网查元数据（豆瓣）；debug 清单自带此权限，release 必须在主清单声明 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="tracker"
         android:name="${applicationName}"

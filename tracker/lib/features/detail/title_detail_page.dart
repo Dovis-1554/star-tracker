@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants.dart';
 import '../../core/theme.dart';
@@ -7,11 +8,32 @@ import '../../data/repository/title_repository.dart';
 import '../../main.dart';
 import '../../ui/cover/cover_generator.dart';
 import '../edit/edit_title_page.dart';
+import '../search/search_title_page.dart';
+
+/// 详情页多季列表的排序方式。存 shared_preferences（key: detail.seasonSort）。
+abstract final class SeasonSort {
+  /// 按上映年份升序（默认）——第 1 季在最前，与搜索结果的排序一致。
+  static const year = 'year';
+
+  /// 按季号升序。
+  static const no = 'no';
+
+  /// 按添加时间升序，先录入的在前。
+  static const added = 'added';
+
+  static const all = <String>[year, no, added];
+
+  static String label(String v) => switch (v) {
+        year => '上映年份',
+        no => '季号',
+        _ => '添加时间',
+      };
+}
 
 /// 详情页：同剧各季聚合在一个页面展示。
 ///
 /// 通过 [repository.watchTitles] 订阅全部条目，按基准名（去季号）聚合出
-/// 本剧的季列表；「第N季」标签切换当前季，行尾「＋」新增一季。
+/// 本剧的季列表；「第N季」标签切换当前季，行尾「＋」新增一季、排序按钮调季序。
 /// 数据仍是一季一条记录，这里只做聚合展示。
 class TitleDetailPage extends StatefulWidget {
   const TitleDetailPage({super.key, required this.item});
@@ -29,6 +51,23 @@ class _TitleDetailPageState extends State<TitleDetailPage> {
   /// 用户手动切过季后就尊重他的选择；没切过则一直停在最后一季。
   bool _picked = false;
 
+  String _seasonSort = SeasonSort.year;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((p) {
+      if (!mounted) return;
+      setState(() => _seasonSort = p.getString('detail.seasonSort') ?? _seasonSort);
+    });
+  }
+
+  Future<void> _setSeasonSort(String v) async {
+    setState(() => _seasonSort = v);
+    final p = await SharedPreferences.getInstance();
+    await p.setString('detail.seasonSort', v);
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TitleRow>>(
@@ -41,11 +80,10 @@ class _TitleDetailPageState extends State<TitleDetailPage> {
           group = [widget.item];
         } else {
           final base = TitleRepository.baseNameOf(widget.item.name);
-          group = all
-              .where((t) => TitleRepository.baseNameOf(t.name) == base)
-              .toList()
-            ..sort((a, b) => TitleRepository.seasonNoOf(a.name)
-                .compareTo(TitleRepository.seasonNoOf(b.name)));
+          group = _sortSeasons(
+            all.where((t) => TitleRepository.baseNameOf(t.name) == base).toList(),
+            _seasonSort,
+          );
         }
         if (group.isEmpty) {
           return Scaffold(
@@ -53,21 +91,24 @@ class _TitleDetailPageState extends State<TitleDetailPage> {
             body: const Center(child: Text('条目已删除')),
           );
         }
-        // 默认停在最后一季；用户手动切换后以选择为准，选中季被删则回退到最后一季。
+        // 默认停在最后一季（季号最大）；用户手动切换后以选择为准，
+        // 选中季被删则回退到最后一季。这里不取列表末尾——列表顺序会随排序方式变。
         TitleRow current;
         if (_picked) {
           try {
             current = group.firstWhere((t) => t.id == _selectedId);
           } on StateError {
-            current = group.last;
+            current = _latestSeason(group);
           }
         } else {
-          current = group.last;
+          current = _latestSeason(group);
           _selectedId = current.id;
         }
         return _DetailBody(
           item: current,
           seasons: group,
+          seasonSort: _seasonSort,
+          onSeasonSortChanged: _setSeasonSort,
           onSwitch: (id) => setState(() {
             _picked = true;
             _selectedId = id;
@@ -76,6 +117,43 @@ class _TitleDetailPageState extends State<TitleDetailPage> {
       },
     );
   }
+
+  /// 「最后一季」= 季号最大的一季（季号相同取最近更新的），与展示顺序无关。
+  TitleRow _latestSeason(List<TitleRow> seasons) {
+    final ordered = [...seasons]..sort((a, b) {
+      final c = TitleRepository.seasonNoOf(a.name)
+          .compareTo(TitleRepository.seasonNoOf(b.name));
+      return c != 0 ? c : b.updatedAt.compareTo(a.updatedAt);
+    });
+    return ordered.last;
+  }
+}
+
+List<TitleRow> _sortSeasons(List<TitleRow> list, String mode) {
+  final out = [...list];
+  int byNo(TitleRow a, TitleRow b) =>
+      TitleRepository.seasonNoOf(a.name).compareTo(TitleRepository.seasonNoOf(b.name));
+
+  switch (mode) {
+    case SeasonSort.no:
+      out.sort(byNo);
+      break;
+    case SeasonSort.added:
+      out.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      break;
+    default:
+      // 上映年份升序；缺年份的排最后；同年按季号兜底。
+      out.sort((a, b) {
+        final ay = a.releaseDate;
+        final by = b.releaseDate;
+        if (ay == null && by == null) return byNo(a, b);
+        if (ay == null) return 1;
+        if (by == null) return -1;
+        final c = ay.compareTo(by);
+        return c != 0 ? c : byNo(a, b);
+      });
+  }
+  return out;
 }
 
 class _DetailBody extends StatelessWidget {
@@ -83,31 +161,30 @@ class _DetailBody extends StatelessWidget {
     required this.item,
     required this.seasons,
     required this.onSwitch,
+    required this.seasonSort,
+    required this.onSeasonSortChanged,
   });
 
   /// 当前展示的季。
   final TitleRow item;
 
-  /// 同剧全部季（按季号升序）。
+  /// 同剧全部季，顺序由 [seasonSort] 决定。
   final List<TitleRow> seasons;
 
   final ValueChanged<String> onSwitch;
+  final String seasonSort;
+  final ValueChanged<String> onSeasonSortChanged;
 
+  /// 新增一季走豆瓣搜索（关键词预填基准剧名），搜不到可退回手动创建。
   Future<void> _addSeason(BuildContext context) async {
-    final name = await repository.nextSeasonName(item.name);
-    if (!context.mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => EditTitlePage(
-          prefill: TitlePrefill(
-            name: name,
-            type: item.type,
-            platform: item.platform,
-            status: ItemStatus.watching,
-          ),
-        ),
+    final base = TitleRepository.baseNameOf(item.name);
+    final msg = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => SearchTitlePage(baseName: base),
       ),
     );
+    if (msg == null || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -145,12 +222,14 @@ class _DetailBody extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _Header(item: item),
-            // 季切换行：第N季标签 + 行尾「＋」新增一季
+            // 季切换行：第N季标签 + 行尾排序、新增一季
             _SeasonTabs(
               seasons: seasons,
               selectedId: item.id,
               onSwitch: onSwitch,
               onAdd: () => _addSeason(context),
+              seasonSort: seasonSort,
+              onSeasonSortChanged: onSeasonSortChanged,
             ),
             const SizedBox(height: 12),
             _Progress(item: item),
@@ -199,12 +278,16 @@ class _SeasonTabs extends StatelessWidget {
     required this.selectedId,
     required this.onSwitch,
     required this.onAdd,
+    required this.seasonSort,
+    required this.onSeasonSortChanged,
   });
 
   final List<TitleRow> seasons;
   final String selectedId;
   final ValueChanged<String> onSwitch;
   final VoidCallback onAdd;
+  final String seasonSort;
+  final ValueChanged<String> onSeasonSortChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -232,6 +315,31 @@ class _SeasonTabs extends StatelessWidget {
               ),
             ),
           ),
+          // 只有多于一季时排序才有意义
+          if (seasons.length > 1)
+            PopupMenuButton<String>(
+              tooltip: '季排序',
+              icon: const Icon(Icons.sort, size: 20),
+              onSelected: onSeasonSortChanged,
+              itemBuilder: (_) => [
+                for (final s in SeasonSort.all)
+                  PopupMenuItem<String>(
+                    value: s,
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          child: s == seasonSort
+                              ? const Icon(Icons.check,
+                                  size: 14, color: AppTheme.accent)
+                              : null,
+                        ),
+                        Text(SeasonSort.label(s)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
           IconButton(
             tooltip: '新增一季',
             icon: const Icon(Icons.add),

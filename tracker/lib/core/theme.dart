@@ -18,6 +18,9 @@ abstract final class AppTheme {
   static const accent = Color(0xFF1D9E75);
   static const onAccent = Color(0xFFE1F5EE);
 
+  // 危险操作（删除确认）
+  static const danger = Color(0xFFE24C4C);
+
   // 封面占位辅色（由标题 hash 取用）
   static const coverPalette = <Color>[
     Color(0xFF0F6E56),

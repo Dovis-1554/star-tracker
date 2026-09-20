@@ -8,10 +8,12 @@ import '../../data/repository/title_repository.dart';
 import '../../main.dart';
 import '../../ui/cover/cover_generator.dart';
 import '../../ui/widgets/option_chips.dart';
-import '../edit/edit_title_page.dart';
 import '../detail/title_detail_page.dart';
+import '../search/search_title_page.dart';
 
 /// 片单页：封面墙 / 列表双视图 + 状态筛选。
+///
+/// 排序固定为「按打开（最后修改）时间倒序」；多季的排序放在详情页。
 class TitleListPage extends StatefulWidget {
   const TitleListPage({super.key});
 
@@ -53,12 +55,126 @@ class _TitleListPageState extends State<TitleListPage> {
     await p.setInt('grid.columns', _columns);
   }
 
+  // ---------- 长按多选删除 ----------
+
+  /// 多选模式下选中的是「整部剧」，键为基准名（去季号）。
+  /// 首页一张卡 = 一部剧，删除时该剧所有季一起删。
+  bool _selecting = false;
+  final Set<String> _selected = <String>{};
+
+  void _exitSelection() => setState(() {
+        _selecting = false;
+        _selected.clear();
+      });
+
+  void _toggleSelected(String base) => setState(() {
+        if (_selected.contains(base)) {
+          _selected.remove(base);
+          if (_selected.isEmpty) _selecting = false;
+        } else {
+          _selected.add(base);
+        }
+      });
+
+  void _enterSelection(String base) => setState(() {
+        _selecting = true;
+        _selected.add(base);
+      });
+
+  Future<void> _deleteSelected() async {
+    final bases = _selected.toList()..sort();
+    final all = await repository.allTitles();
+    if (!mounted) return;
+    final doomed = all
+        .where((t) => bases.contains(TitleRepository.baseNameOf(t.name)))
+        .toList();
+    if (doomed.isEmpty) {
+      _exitSelection();
+      return;
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('删除选中条目'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final b in bases)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '· $b',
+                  style: const TextStyle(
+                    fontSize: AppTheme.fontSizeBody,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Text(
+              '连同各季共 ${doomed.length} 条记录一起删除，不可恢复。',
+              style: const TextStyle(
+                fontSize: AppTheme.fontSizeBody,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text(
+              '删除',
+              style: TextStyle(color: AppTheme.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    for (final t in doomed) {
+      await repository.softDelete(t.id);
+    }
+    if (!mounted) return;
+    setState(() {
+      _selecting = false;
+      _selected.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('已删除 ${bases.length} 部剧（${doomed.length} 条记录）'),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('追剧'),
+        leading: _selecting
+            ? IconButton(
+                tooltip: '退出多选',
+                icon: const Icon(Icons.close),
+                onPressed: _exitSelection,
+              )
+            : null,
+        title: Text(_selecting ? '已选 ${_selected.length} 部' : '追剧'),
         actions: [
+          if (_selecting)
+            IconButton(
+              tooltip: '删除所选',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: _selected.isEmpty ? null : _deleteSelected,
+            )
+          else ...[
           PopupMenuButton<int>(
             tooltip: '封面列数',
             icon: const Icon(Icons.view_column_outlined),
@@ -93,14 +209,25 @@ class _TitleListPageState extends State<TitleListPage> {
               _persistView();
             },
           ),
+          ],
         ],
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: _selecting
+          ? null
+          : FloatingActionButton(
         backgroundColor: AppTheme.accent,
         foregroundColor: AppTheme.onAccent,
-        onPressed: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const EditTitlePage()),
-        ),
+        onPressed: () async {
+          final msg = await Navigator.of(context).push<String>(
+            MaterialPageRoute<String>(
+              builder: (_) => const SearchTitlePage(),
+            ),
+          );
+          if (msg == null || !context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(msg)),
+          );
+        },
         child: const Icon(Icons.add),
       ),
       body: Column(
@@ -128,7 +255,15 @@ class _TitleListPageState extends State<TitleListPage> {
               onPageChanged: (i) => setState(() => _status = _pages[i]),
               children: [
                 for (final s in _pages)
-                  _CategoryPage(status: s, grid: _grid, columns: _columns),
+                  _CategoryPage(
+                    status: s,
+                    grid: _grid,
+                    columns: _columns,
+                    selecting: _selecting,
+                    selected: _selected,
+                    onToggle: _toggleSelected,
+                    onLongPress: _enterSelection,
+                  ),
               ],
             ),
           ),
@@ -144,11 +279,19 @@ class _CategoryPage extends StatelessWidget {
     required this.status,
     required this.grid,
     required this.columns,
+    required this.selecting,
+    required this.selected,
+    required this.onToggle,
+    required this.onLongPress,
   });
 
   final String? status;
   final bool grid;
   final int columns;
+  final bool selecting;
+  final Set<String> selected;
+  final ValueChanged<String> onToggle;
+  final ValueChanged<String> onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -185,8 +328,23 @@ class _CategoryPage extends StatelessWidget {
           builder: (context, countSnapshot) {
             final counts = countSnapshot.data ?? const <String, int>{};
             return grid
-                ? _CoverWall(items: items, counts: counts, columns: columns)
-                : _TitleListView(items: items, counts: counts);
+                ? _CoverWall(
+                    items: items,
+                    counts: counts,
+                    columns: columns,
+                    selecting: selecting,
+                    selected: selected,
+                    onToggle: onToggle,
+                    onLongPress: onLongPress,
+                  )
+                : _TitleListView(
+                    items: items,
+                    counts: counts,
+                    selecting: selecting,
+                    selected: selected,
+                    onToggle: onToggle,
+                    onLongPress: onLongPress,
+                  );
           },
         );
       },
@@ -195,6 +353,9 @@ class _CategoryPage extends StatelessWidget {
 }
 
 /// 按基准名（去季号）把各季分组，组内按季号升序；组间按「本组最后修改时间」倒序。
+///
+/// 首页一直按打开（最后修改）时间排——最近动过的剧在最前。
+/// 多季内部的排序不在这里做，交给详情页（见 [SeasonSort]）。
 List<List<TitleRow>> _groupSeasons(List<TitleRow> all) {
   final groups = <String, List<TitleRow>>{};
   for (final t in all) {
@@ -202,21 +363,25 @@ List<List<TitleRow>> _groupSeasons(List<TitleRow> all) {
   }
 
   final result = <List<TitleRow>>[];
-  final stamps = <int>[];
   for (final seasons in groups.values) {
     final ordered = [...seasons]
       ..sort((a, b) => TitleRepository.seasonNoOf(a.name)
           .compareTo(TitleRepository.seasonNoOf(b.name)));
     result.add(ordered);
-    stamps.add(ordered.fold<int>(0, (m, t) => t.updatedAt > m ? t.updatedAt : m));
   }
-  // 排序键取组内最后修改时间；时间相同的按名字稳定排序。
-  final order = List<int>.generate(result.length, (i) => i)
-    ..sort((a, b) {
-      final c = stamps[b].compareTo(stamps[a]);
-      return c != 0 ? c : result[a].first.name.compareTo(result[b].first.name);
-    });
-  return [for (final i in order) result[i]];
+
+  int lastUpdated(List<TitleRow> g) =>
+      g.fold<int>(0, (m, t) => t.updatedAt > m ? t.updatedAt : m);
+
+  result.sort((a, b) {
+    // 排序键取组内最后修改时间；时间相同的按剧名稳定排序，避免刷新后顺序乱跳。
+    final c = lastUpdated(b).compareTo(lastUpdated(a));
+    return c != 0
+        ? c
+        : TitleRepository.baseNameOf(a.first.name)
+            .compareTo(TitleRepository.baseNameOf(b.first.name));
+  });
+  return result;
 }
 
 /// 整部剧对外呈现的状态 = **最后一季**的状态。
@@ -233,11 +398,19 @@ class _CoverWall extends StatelessWidget {
     required this.items,
     required this.counts,
     required this.columns,
+    required this.selecting,
+    required this.selected,
+    required this.onToggle,
+    required this.onLongPress,
   });
 
   final List<TitleRow> items;
   final Map<String, int> counts;
   final int columns;
+  final bool selecting;
+  final Set<String> selected;
+  final ValueChanged<String> onToggle;
+  final ValueChanged<String> onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -262,7 +435,14 @@ class _CoverWall extends StatelessWidget {
           itemCount: items.length,
           itemBuilder: (context, i) {
             final t = items[i];
-            return _CoverCard(item: t, watched: counts[t.id] ?? 0);
+            return _CoverCard(
+              item: t,
+              watched: counts[t.id] ?? 0,
+              selecting: selecting,
+              checked: selected.contains(TitleRepository.baseNameOf(t.name)),
+              onToggle: onToggle,
+              onLongPress: onLongPress,
+            );
           },
         );
       },
@@ -271,27 +451,65 @@ class _CoverWall extends StatelessWidget {
 }
 
 class _CoverCard extends StatelessWidget {
-  const _CoverCard({required this.item, required this.watched});
+  const _CoverCard({
+    required this.item,
+    required this.watched,
+    required this.selecting,
+    required this.checked,
+    required this.onToggle,
+    required this.onLongPress,
+  });
 
   final TitleRow item;
   final int watched;
+  final bool selecting;
+  final bool checked;
+  final ValueChanged<String> onToggle;
+  final ValueChanged<String> onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final total = item.totalEpisodes;
+    final base = TitleRepository.baseNameOf(item.name);
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => TitleDetailPage(item: item)),
-      ),
+      onTap: () {
+        if (selecting) {
+          onToggle(base);
+          return;
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => TitleDetailPage(item: item)),
+        );
+      },
+      onLongPress: () => onLongPress(base),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 固定 2:3，占位图与远程封面都不会被裁切或压扁
           AspectRatio(
             aspectRatio: AppTheme.coverAspect,
-            child: GeneratedCover(
-              title: item.name,
-              path: item.coverPath,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                GeneratedCover(
+                  title: item.name,
+                  path: item.coverPath,
+                ),
+                if (selecting)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: _SelectMark(checked: checked),
+                  ),
+                if (checked)
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0x331D9E75),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                      border: Border.all(color: AppTheme.accent, width: 1.5),
+                    ),
+                  ),
+              ],
             ),
           ),
           const SizedBox(height: 6),
@@ -327,11 +545,48 @@ class _CoverCard extends StatelessWidget {
   }
 }
 
+/// 多选模式下的勾选标记（未选空心圆、已选绿色对勾）。
+class _SelectMark extends StatelessWidget {
+  const _SelectMark({required this.checked});
+
+  final bool checked;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: checked ? AppTheme.accent : const Color(0x99000000),
+        border: Border.all(
+          color: checked ? AppTheme.accent : AppTheme.border,
+          width: 1.2,
+        ),
+      ),
+      child: checked
+          ? const Icon(Icons.check, size: 14, color: AppTheme.onAccent)
+          : null,
+    );
+  }
+}
+
 class _TitleListView extends StatelessWidget {
-  const _TitleListView({required this.items, required this.counts});
+  const _TitleListView({
+    required this.items,
+    required this.counts,
+    required this.selecting,
+    required this.selected,
+    required this.onToggle,
+    required this.onLongPress,
+  });
 
   final List<TitleRow> items;
   final Map<String, int> counts;
+  final bool selecting;
+  final Set<String> selected;
+  final ValueChanged<String> onToggle;
+  final ValueChanged<String> onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -343,13 +598,20 @@ class _TitleListView extends StatelessWidget {
         final t = items[i];
         final total = t.totalEpisodes;
         final platform = t.platform;
+        final base = TitleRepository.baseNameOf(t.name);
+        final checked = selected.contains(base);
         return ListTile(
           contentPadding: EdgeInsets.zero,
-          leading: GeneratedCover(
-            title: t.name,
-            path: t.coverPath,
-            width: 40,
-          ),
+          leading: selecting
+              ? SizedBox(
+                  width: 40,
+                  child: Center(child: _SelectMark(checked: checked)),
+                )
+              : GeneratedCover(
+                  title: t.name,
+                  path: t.coverPath,
+                  width: 40,
+                ),
           title: Text(
             TitleRepository.baseNameOf(t.name),
             maxLines: 1,
@@ -370,10 +632,23 @@ class _TitleListView extends StatelessWidget {
               color: AppTheme.textTertiary,
             ),
           ),
-          trailing: _StatusBadge(status: t.status),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => TitleDetailPage(item: t)),
-          ),
+          trailing: selecting
+              ? (checked
+                  ? const Icon(Icons.check_circle, color: AppTheme.accent, size: 20)
+                  : const Icon(Icons.radio_button_unchecked,
+                      color: AppTheme.textTertiary, size: 20))
+              : _StatusBadge(status: t.status),
+          selected: checked,
+          onTap: () {
+            if (selecting) {
+              onToggle(base);
+              return;
+            }
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => TitleDetailPage(item: t)),
+            );
+          },
+          onLongPress: () => onLongPress(base),
         );
       },
     );

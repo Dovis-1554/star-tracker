@@ -24,6 +24,9 @@ dependencies:
   # 轻量本地偏好（封面墙列数、视图模式等）
   shared_preferences: ^2.3.0
 
+  # M2 元数据搜索（豆瓣 suggest 接口 + 封面下载）
+  http: ^1.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
