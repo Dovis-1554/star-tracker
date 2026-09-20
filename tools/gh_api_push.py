@@ -84,9 +84,17 @@ def main():
     if local_sha is None:
         raise SystemExit('无法在本地复现提交对象 %s（author=%s committer=%s）'
                          % (commit['sha'], a, c))
-    run(['git', 'update-ref', 'refs/heads/main', local_sha])
-    run(['git', 'update-ref', 'refs/remotes/origin/main', local_sha])
+    _write_ref('refs/heads/main', local_sha)
+    _write_ref('refs/remotes/origin/main', local_sha)
     print('本地指针已同步：%s' % local_sha)
+
+
+def _write_ref(ref, sha):
+    """直接写引用文件：本机 `git update-ref` 写 refs/remotes 后会被清掉，写文件更稳。"""
+    import pathlib
+    p = pathlib.Path(CWD) / '.git' / ref
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(sha + '\n', encoding='utf-8')
 
 
 def _reproduce(obj, parent):
